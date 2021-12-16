@@ -14,178 +14,142 @@
 #
 # Usage:
 # psHyper-V_WoL.ps1 [UDP port number] [Loop until end]
-# ex: psHyper-V_WoL.ps1 7 $TRUE
-# ex: psHyper-V_WoL.ps1 7 $FALSE
+# ex: psHyper-V_WoL.ps1 7 -Loop
+# ex: psHyper-V_WoL.ps1 7
 #
 # Error codes:
 #  0 - execution successful
 #  1 - incorrect command line specified
 # --------------------------------------------------------------------------------------------------------
 
-function Receive-UDPMessage
-{
-    [CmdletBinding(DefaultParameterSetName='Relevance', SupportsShouldProcess=$False)]
-
-    Param([parameter(Mandatory=$True,Position=0, HelpMessage='The UDP port to listen on')]
+param([parameter(Mandatory = $True, Position = 0, HelpMessage = 'The UDP port to listen on')]
     [Int]$Port,
-    [parameter(Mandatory=$True,Position=1, HelpMessage='Boolean value to specify whether the code should continue listening after processing 1 message or quit')]
-    [bool]$Loop
+    [parameter(HelpMessage = 'Boolean value to specify whether the code should continue listening after processing 1 message or quit')]
+    [switch]$Loop
+)
+
+function Receive-UDPMessage {
+    [CmdletBinding(DefaultparameterSetName = 'Relevance', SupportsShouldProcess = $False)]
+
+    param([parameter(Mandatory = $True, Position = 0, HelpMessage = 'The UDP port to listen on')]
+        [Int]$Port,
+        [parameter(Mandatory = $True, Position = 1, HelpMessage = 'Boolean value to specify whether the code should continue listening after processing 1 message or quit')]
+        [bool]$Loop
     )
 
-    Try
-    {
-        $endpoint = new-object System.Net.IPEndPoint ([IPAddress]::Any,$port)
+    try {
+        $endpoint = new-object System.Net.IPEndPoint ([IPAddress]::Any, $port)
         $udpclient = new-Object System.Net.Sockets.UdpClient $port
 
-        Do
-        {
+        do {
             Write-Host
             Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Waiting for message on UDP port $Port..."
             Write-Host ""
         
             $content = $udpclient.Receive([ref]$endpoint)
-            $strContent = $([Text.Encoding]::ASCII.GetString($content))
+            # $strContent = $([Text.Encoding]::ASCII.GetString($content))
 
             Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Message received from: $($endpoint.address.toString()):$($endpoint.Port)"
 
             $tmpVal = ""
-            $receivedMAC = ""
+            $receivedMac = ""
 
-            For($i = 6; $i -lt 12; $i++)
-            {
-                $tmpVal = [convert]::tostring($content[$i],16)
-                If ($tmpVal.Length -lt 2){$tmpVal = "0" + $tmpVal}
-                $receivedMAC = $receivedMAC + $tmpVal.ToUpper()
+            for ($i = 6; $i -lt 12; $i++) {
+                $tmpVal = [convert]::tostring($content[$i], 16)
+                if ($tmpVal.Length -lt 2) { $tmpVal = "0" + $tmpVal }
+                $receivedMac = $receivedMac + $tmpVal.ToUpper()
             }
 
-            $tmpMAC = FormatMAC -MACToFormat $receivedMAC
-            Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "WoL MAC address received: $($tmpMAC)"
-            $tmpMAC = ""
-
+            Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "WoL MAC address received: $(FormatMac -MacToFormat $receivedMac)"
             Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Searching MAC addresses on Hyper-V host $myFQDN"
 
-            $boolFound = $False
-
-            ForEach ($strMAC in $arrMACs)
-            {
-                If ($strMAC.Trim() -eq $receivedMAC) #$strContent.Trim())
-                {
-                    $tmpMAC = FormatMAC -MACToFormat $strMAC
-                    Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Matched MAC address: $($tmpMAC)"
-                    $tmpMAC = ""
-
-                    StartVM -MacToStart $strMAC
-                    $boolFound = $True
-                }
-                Else
-                {
-                    # No match, keep going
-                }
+            if ($arrMacs.ContainsKey($receivedMac)) {
+                $arrVMs = $arrMacs.$receivedMac
+                Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Matched MAC address: $(FormatMac -MacToFormat $receivedMac)"
+                StartVMs -VMs $arrVMs
             }
-
-            If ($boolFound -eq $false){Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "No VM found on host that matches the MAC address received."}
+            else {
+                Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "No VM found on host that matches the MAC address received."
+            }
 
             Write-Host
             Write-Host "-------------------------------------------------------------------------------"
-        }
-    While($Loop)
+        }while ($Loop)
     }
-    Catch [system.exception]
-    {
+    catch [system.exception] {
         throw $error[0]
     }
-    Finally
-    {
+    finally {
         Write-Host (Get-Date).ToString("yyyy/MM/dd HH:MM:ss") "Closing connection."
         $udpclient.Close()
     }
 }
 
-function StartVM
-{
+function StartVMs {
     [CmdletBinding()]
-    Param(
-    [Parameter(Mandatory=$true)]
-    [string]$MacToStart
+    param(
+        [parameter(Mandatory = $true)]
+        [Microsoft.HyperV.PowerShell.VirtualMachine[]]$VMs
     )
 
-    ForEach ($startVM in $objVMs)
-    {
-        If ($MacToStart -eq $startVM.NetworkAdapters.Item(0).MacAddress.Trim())
-        {
-            Write-Host "Starting VM: $($startVM.Name)"
-            Start-VM -Name $startVM.Name
-        }
+    foreach ($VM in $VMs) {
+        Write-Host "Starting VM: $($VM.Name)"
+        Start-VM -VM $VM
     }
 }
 
-function FormatMAC
-{
+function FormatMac {
     [CmdletBinding()]
-    Param(
-    [Parameter(Mandatory=$true)]
-    [string]$MACToFormat
+    param(
+        [parameter(Mandatory = $true)]
+        [string]$MacToFormat
     )
 
-    $MACToFormat = $MACToFormat.Insert(2, ":")
-    $MACToFormat = $MACToFormat.Insert(5, ":")
-    $MACToFormat = $MACToFormat.Insert(8, ":")
-    $MACToFormat = $MACToFormat.Insert(11, ":")
-    $MACToFormat = $MACToFormat.Insert(14, ":")
+    $MacToFormat = $MacToFormat.Insert(2, ":")
+    $MacToFormat = $MacToFormat.Insert(5, ":")
+    $MacToFormat = $MacToFormat.Insert(8, ":")
+    $MacToFormat = $MacToFormat.Insert(11, ":")
+    $MacToFormat = $MacToFormat.Insert(14, ":")
 
-    Return $MACToFormat
+    return $MacToFormat
 
 }
-
-If ($args.Count -ne 2)
-{
-    Write-Host
-    Write-Host "ERROR: You must specify the correct command line!"
-    Write-Host
-    Write-Host "Usage:"
-    Write-Host "       psReceiveMagicPacket.ps1 (UDP port number) (Loop until end)"
-    Write-Host "       ex: psWindowsUpdate.ps1 7 $([char]36)TRUE"
-    Write-Host
-
-    Exit(1)
-}
-
-
-cls
 
 $myFQDN = (Get-WmiObject win32_ComputerSystem).DNSHostName + "." + (Get-WmiObject win32_ComputerSystem).Domain
 
 $objVMs = Get-VM
 
-If ($objVMs.Count -eq 0)
-{
+if ($objVMs.Count -eq 0) {
     Write-Host "ERROR: No virtual machines found on host!"
 }
-Else
-{
+else {
     Write-Host
     Write-Host "The following Virtual Machines have been found on Hyper-V host $($myFQDN):"
     Write-Host
-    Write-Host "MAC Address        ¦ VM Name"
-    Write-Host "-------------------¦-------------------"
+    Write-Host "MAC Address        ï¿½ VM Name"
+    Write-Host "-------------------ï¿½-------------------"
 
-    $arrMACs = @()
+    $arrMacs = @{}
     
-    ForEach ($VM in $objVMs)
-    {
-        $arrMACs += $VM.NetworkAdapters.Item(0).MacAddress
-        $tmpMAC = FormatMAC -MACToFormat $VM.NetworkAdapters.Item(0).MacAddress
-        Write-Host "$($tmpMAC)  ¦ $($VM.Name)"
-        $tmpMAC = ""
+    forEach ($VM in $objVMs) {
+        forEach ($objMac in $VM.NetworkAdapters) {
+            $strMac = $objMac.MacAddress.Trim()
+            if ($arrMacs.ContainsKey($strMac)) {
+                $arrMacs.$strMac += $VM
+            }
+            else {
+                $arrMacs.Add($strMac, $VM)
+            }
+            Write-Host "$(FormatMac -MacToFormat $strMac)  ï¿½ $($VM.Name)"
+        }
     }
 
-    Write-Host "-------------------¦-------------------"
+    Write-Host "-------------------ï¿½-------------------"
     Write-Host
     Write-Host
     Write-Host "*******************************************************************************"
 
-    $intPort = $args[0]
-    Receive-UDPMessage -Port $intPort -Loop $args[1]
+    Receive-UDPMessage -Port $Port -Loop $Loop
 
-    Exit(0)
+    exit(0)
 }
