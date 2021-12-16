@@ -126,8 +126,8 @@ else {
     Write-Host
     Write-Host "The following Virtual Machines have been found on Hyper-V host $($myFQDN):"
     Write-Host
-    Write-Host "MAC Address        � VM Name"
-    Write-Host "-------------------�-------------------"
+    Write-Host "MAC Address        ¦ VM Name"
+    Write-Host "-------------------¦-------------------"
 
     $arrMacs = @{}
     
@@ -140,11 +140,11 @@ else {
             else {
                 $arrMacs.Add($strMac, $VM)
             }
-            Write-Host "$(FormatMac -MacToFormat $strMac)  � $($VM.Name)"
+            Write-Host "$(FormatMac -MacToFormat $strMac)  ¦ $($VM.Name)"
         }
     }
 
-    Write-Host "-------------------�-------------------"
+    Write-Host "-------------------¦-------------------"
     Write-Host
     Write-Host
     Write-Host "*******************************************************************************"
