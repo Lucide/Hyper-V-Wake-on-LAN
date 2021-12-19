@@ -4,18 +4,17 @@ Hyper-V Wake-on-LAN listener
 .DESCRIPTION
 Listens for Wake On Lan packets, and starts all the Hyper-V VMs with the matching MAC address.
 .PARAMETER Port
-The UDP port to listen on, defaults to 7
+The UDP port to listen on, defaults to 7.
 .PARAMETER Loop
 Keep processing WOL packets indefinitely.
 .PARAMETER All
 Include non-external virtual switches. By default, the script ignores virtual adapters connected to Private or Internal switches,
 since they aren't supposed to be reachable outside.
 .PARAMETER RegisterJob
-Register the script as a scheduled startup job, with the provided arguments. If the job already exists,
-it will be replaced.
+Register a scheduled startup job, with the provided arguments. If the job already exists, it will be replaced.
 The scheduled job will be self-contained, you can then delete this file safely.
 .PARAMETER UnregisterJob
-Unregister the script as a scheduled job on startup, equivalent to Unregister-ScheduledJob -Name 'Hyper-V WOL'.
+Remove the scheduled job, equivalent to "Unregister-ScheduledJob -Name 'Hyper-V WOL'"".
 If '-RegisterJob' is also provided, it will take precedence.
 .INPUTS
 None. You cannot pipe objects to psHyper-V_WoL.ps1
@@ -196,13 +195,6 @@ if($RegisterJob -or $UnregisterJob){
     Unregister-ScheduledJob $name -ErrorAction SilentlyContinue
 
     if($RegisterJob){
-        <# $taskArgs = @($Port)
-        if($Loop){
-            $taskArgs += '-Loop'
-        }
-        if($All){
-            $taskArgs += '-All'
-        }#>
         $trigger = New-JobTrigger -AtStartup
         $options = New-ScheduledJobOption -RunElevated -IdleDuration 0 
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
@@ -210,8 +202,8 @@ if($RegisterJob -or $UnregisterJob){
         # disable three days execution limit
         Set-ScheduledTask -TaskName $name -TaskPath '\Microsoft\Windows\PowerShell\ScheduledJobs' -Settings $settings
 
-        Write-Host 'A startup job has been created, you can now delete this script.'
-        Write-Host "To removed it, run with -UnregisterJob or use `"Unregister-ScheduledJob -Name '$($name)'`" in a Powershell shell."
+        Write-Host 'A startup job has been created, it''s self-contained, so you can now delete this script.'
+        Write-Host "To removed it, run with -UnregisterJob or use ""Unregister-ScheduledJob -Name '$name'"" in a Powershell shell."
     }
 } else{
     Invoke-Command -ScriptBlock $script -ArgumentList $argList
