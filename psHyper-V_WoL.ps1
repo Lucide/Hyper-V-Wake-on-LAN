@@ -196,7 +196,7 @@ if($RegisterJob -or $UnregisterJob){
 
     if($RegisterJob){
         $trigger = New-JobTrigger -AtStartup
-        $options = New-ScheduledJobOption -RunElevated -IdleDuration 0 
+        $options = New-ScheduledJobOption -RunElevated
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
         Register-ScheduledJob -ScriptBlock $script -Name $name -Trigger $trigger -ScheduledJobOption $options -ArgumentList $argList
         # disable three days execution limit
