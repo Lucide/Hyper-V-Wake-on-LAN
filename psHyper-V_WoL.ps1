@@ -33,12 +33,9 @@ Registers a startup job with the provided parameters. Does not perform any addit
 PS> psHyper-V_WoL.ps1 -UnregisterJob
 Removes the startup job. Additional parameters are unnecessary.
 .NOTES
-History:
-v0.1 - Daniel Oxley - Initial version
-V0.2 - Daniel Oxley - Tidy up messages in console window and added Time/Date information
-V1.0 - Lucide - see https://github.com/Lucide/Hyper-V-Wake-on-LAN
+Originally written by:
+Daniel Oxley
 
-Please maintain this header and provide credit to author.
 You are free to use this code for non-commercial reasons.  No support is provided whatsoever and you use it at your own risk.
 No responsibility by the author is accepted.
 
@@ -61,83 +58,68 @@ param([parameter(HelpMessage = 'The UDP port to listen on, defaults to 7')]
     [parameter(HelpMessage = 'Remove the scheduled job')]
     [switch]$UnregisterJob
 )
-    
-$argList = $Port, $Loop, $All
+
+$jobEnv = @{ Port = $Port; Loop = $Loop; All = $All }
 
 $script = {
-    param(
-        [Parameter(Mandatory)]
-        [Int]$Port,
-        [Parameter(Mandatory)]
-        [bool]$Loop,
-        [Parameter(Mandatory)]
-        [bool]$All
-    )
-    function Receive-UDPMessage{    
+    function Receive-UDPMessage {    
         param([parameter(Mandatory)]
             [Int]$Port,
             [parameter(Mandatory)]
             [bool]$Loop
         )
     
-        try{
-            $endpoint = new-object System.Net.IPEndPoint ([IPAddress]::Any, $port)
-            $udpClient = new-Object System.Net.Sockets.UdpClient $port
-    
-            do{
+        try {
+            $endpoint = New-Object System.Net.IPEndPoint ([IPAddress]::Any, $port)
+            $udpClient = New-Object System.Net.Sockets.UdpClient $port
+        } catch [System.Net.Sockets.SocketException] {
+            Write-Error 'Failed to create socket. (another instance already running?)'
+            exit(1)
+        }
+        try {
+            do {
                 Write-Host
                 Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Waiting for message on UDP port $Port..."
                 Write-Host
             
-                $content = $udpClient.Receive([ref]$endpoint)
-                # $strContent = $([Text.Encoding]::ASCII.GetString($content))
+                
+                do {
+                    $content = $udpClient.Receive([ref]$endpoint)
+                }while ($content.Length -lt 12)
     
                 Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Message received from: $($endpoint.address.toString()):$($endpoint.Port)"
     
-                $tmpVal = ''
                 $receivedMac = ''
-    
-                for($i = 6; $i -lt 12; $i++){
-                    $tmpVal = [convert]::tostring($content[$i], 16)
-                    if($tmpVal.Length -lt 2){
-                        $tmpVal = '0' + $tmpVal 
-                    }
-                    $receivedMac = $receivedMac + $tmpVal.ToUpper()
-                }
-    
+                for ($i = 6; $i -lt 12; ++$i) {
+                    $receivedMac = $receivedMac + ('{0:X2}' -f [int]$content[$i])
+                }    
                 Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "WoL MAC address received: $(FormatMac $receivedMac )"
-                Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Searching MAC addresses on Hyper-V host $myFQDN"
-    
-                if($arrMacs.ContainsKey($receivedMac)){
-                    $arrVMs = $arrMacs.$receivedMac
-                    Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Matched MAC address: $(FormatMac $receivedMac )"
-                    StartVMs($arrVMs)
-                } else{
+                if ($arrMacs.ContainsKey($receivedMac)) {
+                    StartVMs($arrMacs.$receivedMac)
+                } else {
                     Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'No VM found on host that matches the MAC address received.'
                 }
-    
                 Write-Host
-                Write-Host '-------------------------------------------------------------------------------'
-            }while($Loop)
-        } catch [system.exception]{
-            throw $error[0]
-        } finally{
+            }while ($Loop)
+        } catch {
+            Write-Error (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') + ' ' + 'An error occurred while listening:' -Exception $_
+        } finally {
             Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'Closing connection.'
             $udpClient.Close()
         }
     }
-    function StartVMs{
+    function StartVMs {
         param(
             [parameter(Mandatory)]
             [Microsoft.HyperV.PowerShell.VirtualMachine[]]$VMs
         )
     
-        foreach($VM in $VMs){
+        foreach ($VM in $VMs) {
             Write-Host "Starting VM: $($VM.Name)"
             Start-VM $VM
         }
     }
-    function FormatMac{
+    function FormatMac {
         param(
             [parameter(Mandatory)]
             [string]$MacToFormat
@@ -155,57 +137,71 @@ $script = {
     $myFQDN = (Get-WmiObject win32_ComputerSystem).DNSHostName + '.' + (Get-WmiObject win32_ComputerSystem).Domain
     $objVMs = Get-VM
 
-    if($objVMs.Count -gt 0){
-        Write-Host
-        Write-Host "The following Virtual Machines have been found on Hyper-V host $($myFQDN):"
-        Write-Host
-        Write-Host 'MAC Address        ¦ VM Name'
-        Write-Host '-------------------¦-------------------'
+    if ($objVMs.Count -le 0) {
+        Write-Error 'ERROR: No virtual machines found on host! (Is Hyper-V even enabled?)'
+        exit(1)
+    }
 
-        $arrMacs = @{}
+    Write-Host
+    Write-Host "The following Virtual Machines have been found on Hyper-V host $($myFQDN):"
+    Write-Host
+    Write-Host 'MAC Address        ¦ VM Name'
+    Write-Host '-------------------¦-------------------'
+
+    $arrMacs = @{}
     
-        forEach($VM in $objVMs){
-            forEach($objAdapter in $VM.NetworkAdapters){
-                if((Get-VMSwitch -Id ($objAdapter.SwitchId)).SwitchType -eq 'External' -or $All){
-                    $strMac = $objAdapter.MacAddress.Trim()
-                    if($arrMacs.ContainsKey($strMac)){
-                        $arrMacs.$strMac += $VM
-                    } else{
-                        $arrMacs.Add($strMac, $VM)
-                    }
-                    Write-Host "$(FormatMac $strMac)  ¦ $($VM.Name)"
+    forEach ($VM in $objVMs) {
+        forEach ($objAdapter in $VM.NetworkAdapters) {
+            if ((Get-VMSwitch -Id ($objAdapter.SwitchId)).SwitchType -eq 'External' -or $All) {
+                $strMac = $objAdapter.MacAddress.Trim()
+                if ($arrMacs.ContainsKey($strMac)) {
+                    $arrMacs.$strMac += $VM
+                } else {
+                    $arrMacs.Add($strMac, $VM)
                 }
+                Write-Host "$(FormatMac $strMac)  ¦ $($VM.Name)"
             }
         }
-
-        Write-Host '-------------------¦-------------------'
-        Write-Host
-        Write-Host
-        Write-Host '*******************************************************************************'
-
-        Receive-UDPMessage $Port $Loop
-    } else{
-        Write-Host 'ERROR: No virtual machines found on host! (Is Hyper-V even enabled?)'
     }
+    Write-Host '-------------------¦-------------------'
+    Write-Host
+
+    Receive-UDPMessage $Port $Loop
     exit(0)
 }
 
-if($RegisterJob -or $UnregisterJob){
+function createJobEnv {
+    param(
+        [parameter(Mandatory)]
+        $jobEnv
+    )
+    $initScript = @('$env = @''')
+    $initScript += [System.Management.Automation.PSSerializer]::Serialize($jobEnv)
+    $initScript += '''@'
+    $initScript += {
+        $env = [System.Management.Automation.PSSerializer]::Deserialize($env)
+        foreach ($var in $env.GetEnumerator()) {
+            Set-Variable -Name $var.Key -Value $var.Value
+        }
+    }.toString()
+    return [scriptblock]::Create(($initScript -join "`n"))
+}
+
+if ($RegisterJob -or $UnregisterJob) {
     $name = 'Hyper-V WOL'
     Unregister-ScheduledJob $name -ErrorAction SilentlyContinue
-
-    if($RegisterJob){
+    if ($RegisterJob) {
         $trigger = New-JobTrigger -AtStartup
         $options = New-ScheduledJobOption -RunElevated
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
-        Register-ScheduledJob -ScriptBlock $script -Name $name -Trigger $trigger -ScheduledJobOption $options -ArgumentList $argList
+        Register-ScheduledJob -InitializationScript (createJobEnv $jobEnv) -ScriptBlock $script -Name $name -Trigger $trigger -ScheduledJobOption $options
         # disable three days execution limit
         Set-ScheduledTask -TaskName $name -TaskPath '\Microsoft\Windows\PowerShell\ScheduledJobs' -Settings $settings
 
         Write-Host 'A startup job has been created, it''s self-contained, so you can now delete this script.'
         Write-Host "To removed it, run with -UnregisterJob or use ""Unregister-ScheduledJob -Name '$name'"" in a Powershell shell."
     }
-} else{
-    Invoke-Command -ScriptBlock $script -ArgumentList $argList
+} else {
+    Invoke-Command -NoNewScope -ScriptBlock $script
 }
 exit(0)
