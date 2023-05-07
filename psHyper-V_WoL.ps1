@@ -5,8 +5,8 @@ Hyper-V Wake-on-LAN listener
 Listens for Wake On Lan packets, and starts all the Hyper-V VMs with the matching MAC address.
 .PARAMETER Port
 The UDP port to listen on, defaults to 7.
-.PARAMETER Loop
-Keep processing WOL packets indefinitely.
+.PARAMETER Once
+Process a single WOL packet.
 .PARAMETER All
 Include non-external virtual switches. By default, the script ignores virtual adapters connected to Private or Internal switches,
 since they aren't supposed to be reachable outside.
@@ -22,12 +22,12 @@ None. You cannot pipe objects to psHyper-V_WoL.ps1
 None. psHyper-V_WoL.ps1 does not generate any output
 .EXAMPLE
 PS> psHyper-V_WoL.ps1
-Listens on port 7 for a WOL packet, starts the matching VMs and terminates.
+Listens on port 7 for incoming WOL packets and starts the matching VMs.
 .EXAMPLE
-PS> psHyper-V_WoL.ps1 -Port 9 -Loop
-Listens on port 9 for incoming WOL packets and starts the matching VMs.
+PS> psHyper-V_WoL.ps1 -Port 9 -Once
+Listens on port 9 for a WOL packet, starts the matching VMs and terminates.
 .EXAMPLE
-PS> psHyper-V_WoL.ps1 -Port 9 -Loop -All -RegisterJob
+PS> psHyper-V_WoL.ps1 -Port 9 -Once -All -RegisterJob
 Registers a startup job with the provided parameters. Does not perform any additional operation.
 .EXAMPLE
 PS> psHyper-V_WoL.ps1 -UnregisterJob
@@ -49,8 +49,8 @@ https://deploymentpros.wordpress.com/2016/11/28/wake-on-lan-for-hyper-v-guests
 param([parameter(HelpMessage = 'The UDP port to listen on, defaults to 7')]
     [PSDefaultValue(Help = '7')]
     [Int]$Port = 7,
-    [parameter(HelpMessage = 'Keep processing WOL packets indefinitely')]
-    [switch]$Loop,
+    [parameter(HelpMessage = 'Process a single WOL packet')]
+    [switch]$Once,
     [parameter(HelpMessage = 'Include non-external virtual switches')]
     [switch]$All,
     [parameter(HelpMessage = 'Register a scheduled startup job, with the provided arguments')]
@@ -59,34 +59,52 @@ param([parameter(HelpMessage = 'The UDP port to listen on, defaults to 7')]
     [switch]$UnregisterJob
 )
 
-$jobEnv = @{ Port = $Port; Loop = $Loop; All = $All }
+$jobEnv = @{ Port = $Port; Once = $Once; All = $All }
 
 $script = {
+    function Open-Socket {
+        param([parameter(Mandatory)]
+            [Int]$Port
+        )
+
+        $socketAttempt = 1
+        do {
+            try {
+                $endpoint = New-Object System.Net.IPEndPoint ([IPAddress]::Any, $port)
+                $udpClient = New-Object System.Net.Sockets.UdpClient $port
+                return $endpoint, $udpClient
+            } catch [System.Net.Sockets.SocketException] {
+                Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "attempt $socketAttempt/5: Failed to create socket. (another instance already running?)" -ForegroundColor Red
+                Write-Error $_
+                Start-Sleep -Seconds 10
+                ++$socketAttempt
+            }
+        }while ($socketAttempt -le 5)
+        return $null
+    }
+
+
     function Receive-UDPMessage {    
         param([parameter(Mandatory)]
             [Int]$Port,
             [parameter(Mandatory)]
-            [bool]$Loop
+            [bool]$Once
         )
     
-        try {
-            $endpoint = New-Object System.Net.IPEndPoint ([IPAddress]::Any, $port)
-            $udpClient = New-Object System.Net.Sockets.UdpClient $port
-        } catch [System.Net.Sockets.SocketException] {
-            Write-Error 'Failed to create socket. (another instance already running?)'
-            exit(1)
+        $endpoint, $udpClient = Open-Socket $Port
+        if (!$endpoint) {
+            exit(-7)
         }
-        try {
-            do {
+        do {
+            try {
                 Write-Host
                 Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Waiting for message on UDP port $Port..."
                 Write-Host
             
-                
                 do {
                     $content = $udpClient.Receive([ref]$endpoint)
                 }while ($content.Length -lt 12)
-    
+
                 Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') "Message received from: $($endpoint.address.toString()):$($endpoint.Port)"
     
                 $receivedMac = ''
@@ -100,13 +118,18 @@ $script = {
                     Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'No VM found on host that matches the MAC address received.'
                 }
                 Write-Host
-            }while ($Loop)
-        } catch {
-            Write-Error (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') + ' ' + 'An error occurred while listening:' -Exception $_
-        } finally {
-            Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'Closing connection.'
-            $udpClient.Close()
-        }
+            } catch {
+                Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'An error occurred while listening:' -ForegroundColor Red
+                Write-Error $_
+                $udpClient.Close()
+                $endpoint, $udpClient = Open-Socket $Port
+                if (!$endpoint) {
+                    break
+                }
+            } 
+        }while (!$Once)
+        Write-Host (Get-Date).ToString('yyyy/MM/dd HH:MM:ss') 'Closing connection.'
+        $udpClient.Close()
     }
     function StartVMs {
         param(
@@ -145,8 +168,8 @@ $script = {
     Write-Host
     Write-Host "The following Virtual Machines have been found on Hyper-V host $($myFQDN):"
     Write-Host
-    Write-Host 'MAC Address        ¦ VM Name'
-    Write-Host '-------------------¦-------------------'
+    Write-Host 'MAC Address        | VM Name'
+    Write-Host '-------------------|-------------------'
 
     $arrMacs = @{}
     
@@ -159,14 +182,14 @@ $script = {
                 } else {
                     $arrMacs.Add($strMac, $VM)
                 }
-                Write-Host "$(FormatMac $strMac)  ¦ $($VM.Name)"
+                Write-Host "$(FormatMac $strMac)  | $($VM.Name)"
             }
         }
     }
-    Write-Host '-------------------¦-------------------'
+    Write-Host '-------------------|-------------------'
     Write-Host
 
-    Receive-UDPMessage $Port $Loop
+    Receive-UDPMessage $Port $Once
     exit(0)
 }
 
