@@ -139,7 +139,13 @@ $script = {
     
         foreach ($VM in $VMs) {
             Write-Host "Starting VM: $($VM.Name)"
-            Start-VM $VM
+            if ($VM.State -eq 'off') {
+                Start-VM $VM
+            } elseif ($VM.State -eq 'paused') {
+                Resume-VM $VM
+            } else {
+                Write-Host "$($VM.Name) already running."
+            }
         }
     }
     function FormatMac {
@@ -214,7 +220,7 @@ if ($RegisterJob -or $UnregisterJob) {
     $name = 'Hyper-V WOL'
     Unregister-ScheduledJob $name -ErrorAction SilentlyContinue
     if ($RegisterJob) {
-        $trigger = New-JobTrigger -AtStartup
+        $trigger = New-JobTrigger -AtStartup -RandomDelay 00:00:30
         $options = New-ScheduledJobOption -RunElevated
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
         Register-ScheduledJob -InitializationScript (createJobEnv $jobEnv) -ScriptBlock $script -Name $name -Trigger $trigger -ScheduledJobOption $options
